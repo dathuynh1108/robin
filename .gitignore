@@ -1,0 +1,5 @@
+src/dataset/input/*
+src/dataset/output/*
+src/unet/output/*
+src/unet/input/*
+__pycache__/*
