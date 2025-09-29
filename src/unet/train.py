@@ -9,13 +9,14 @@ from copy import deepcopy
 import Augmentor
 import PIL
 import imageio
+import tensorflow as tf
 from Augmentor.Operations import Operation
 from PIL import Image
 from alt_model_checkpoint import AltModelCheckpoint
 from keras import backend as K
 from keras.callbacks import (TensorBoard, Callback)
 from keras.optimizers import Adam
-from keras.utils import (multi_gpu_model, Sequence)
+from keras.utils import Sequence
 
 from model.unet import unet
 from utils.img_processing import *
@@ -250,13 +251,13 @@ def create_callbacks(model, original_model, args):
     if args.gpus == 1:
         model_checkpoint = AltModelCheckpoint(args.weights if args.debug == ''
                                               else os.path.join(args.debug, 'weights',
-                                                                'weights-improvement-{epoch:02d}.hdf5'),
+                                                                'weights-improvement-{epoch:02d}.weights.h5'),
                                               model, monitor='val_dice_coef', mode='max', verbose=1,
                                               save_best_only=True, save_weights_only=True)
     else:
         model_checkpoint = AltModelCheckpoint(args.weights if args.debug == ''
                                               else os.path.join(args.debug, 'weights',
-                                                                'weights-improvement-{epoch:02d}.hdf5'),
+                                                                'weights-improvement-{epoch:02d}.weights.h5'),
                                               original_model, monitor='val_dice_coef', mode='max', verbose=1,
                                               save_best_only=True, save_weights_only=True)
     callbacks.append(model_checkpoint)
@@ -285,10 +286,10 @@ def create_callbacks(model, original_model, args):
 
 def dice_coef(y_true, y_pred):
     """Count Sorensen-Dice coefficient for output and ground-truth image."""
-    y_true_f = K.flatten(y_true)
-    y_pred_f = K.flatten(y_pred)
-    intersection = K.sum(y_true_f * y_pred_f)
-    return (2.0 * intersection + 1.0) / (K.sum(y_true_f) + K.sum(y_pred_f) + 1.0)
+    y_true_f = tf.reshape(y_true, [-1])
+    y_pred_f = tf.reshape(y_pred, [-1])
+    intersection = tf.reduce_sum(y_true_f * y_pred_f)
+    return (2.0 * intersection + 1.0) / (tf.reduce_sum(y_true_f) + tf.reduce_sum(y_pred_f) + 1.0)
 
 
 def dice_coef_loss(y_true, y_pred):
@@ -298,10 +299,10 @@ def dice_coef_loss(y_true, y_pred):
 
 def jacard_coef(y_true, y_pred):
     """Count Jaccard coefficient for output and ground-truth image."""
-    y_true_f = K.flatten(y_true)
-    y_pred_f = K.flatten(y_pred)
-    intersection = K.sum(y_true_f * y_pred_f)
-    return (intersection + 1.0) / (K.sum(y_true_f) + K.sum(y_pred_f) - intersection + 1.0)
+    y_true_f = tf.reshape(y_true, [-1])
+    y_pred_f = tf.reshape(y_pred, [-1])
+    intersection = tf.reduce_sum(y_true_f * y_pred_f)
+    return (intersection + 1.0) / (tf.reduce_sum(y_true_f) + tf.reduce_sum(y_pred_f) - intersection + 1.0)
 
 
 def jacard_coef_loss(y_true, y_pred):
@@ -348,7 +349,7 @@ def parse_args():
     # paths.
     parser.add_argument('-i', '--input', type=str, default=os.path.join('.', 'input'),
                         help=r'directory with input train and ground-truth images (default: "%(default)s")')
-    parser.add_argument('-w', '--weights', type=str, default=os.path.join('.', 'bin_weights.hdf5'),
+    parser.add_argument('-w', '--weights', type=str, default=os.path.join('.', 'bin_weights.weights.h5'),
                         help=r'output U-net weights file (default: "%(default)s")')
 
     # Additional callbacks.
@@ -413,61 +414,39 @@ def main():
     test_gt = fnames_gt[test_start:test_stop]
     test_generator = ParallelDataGenerator(test_in, test_gt, args.batchsize, args.augmentate)
 
-    # Creating model.
-    original_model = unet()
-    if args.gpus == 1:
-        model = original_model
-        model.compile(optimizer=Adam(lr=1e-4), loss=dice_coef_loss,
-                      metrics=[dice_coef, jacard_coef, 'accuracy'])
+    # Creating model with distribution strategy for multi-GPU support.
+    if args.gpus > 1:
+        strategy = tf.distribute.MirroredStrategy()
+        print('Number of devices: {}'.format(strategy.num_replicas_in_sync))
+        
+        with strategy.scope():
+            original_model = unet()
+            model = original_model
+            model.compile(optimizer=Adam(learning_rate=1e-4), loss=dice_coef_loss,
+                          metrics=[dice_coef, jacard_coef, 'accuracy'])
     else:
-        model = multi_gpu_model(original_model, gpus=args.gpus)
-        model.compile(optimizer=Adam(lr=1e-4), loss=dice_coef_loss,
+        original_model = unet()
+        model = original_model
+        model.compile(optimizer=Adam(learning_rate=1e-4), loss=dice_coef_loss,
                       metrics=[dice_coef, jacard_coef, 'accuracy'])
+    
     callbacks = create_callbacks(model, original_model, args)
 
     # Running training, validation and testing.
-    if args.extraprocesses == 0:
-        model.fit_generator(
-            generator=train_generator,
-            steps_per_epoch=train_generator.__len__(),  # Compatibility with old Keras versions.
-            validation_data=validation_generator,
-            validation_steps=validation_generator.__len__(),  # Compatibility with old Keras versions. 
-            epochs=args.epochs,
-            shuffle=True,
-            callbacks=callbacks,
-            use_multiprocessing=False,
-            workers=0,
-            max_queue_size=args.queuesize,
-            verbose=1
-        )
-        metrics = model.evaluate_generator(
-            generator=test_generator,
-            use_multiprocessing=False,
-            workers=0,
-            max_queue_size=args.queuesize,
-            verbose=1
-        )
-    else:
-        model.fit_generator(
-            generator=train_generator,
-            steps_per_epoch=train_generator.__len__(),  # Compatibility with old Keras versions.
-            validation_data=validation_generator,
-            validation_steps=validation_generator.__len__(),  # Compatibility with old Keras versions.
-            epochs=args.epochs,
-            shuffle=True,
-            callbacks=callbacks,
-            use_multiprocessing=True,
-            workers=args.extraprocesses,
-            max_queue_size=args.queuesize,
-            verbose=1
-        )
-        metrics = model.evaluate_generator(
-            generator=test_generator,
-            use_multiprocessing=True,
-            workers=args.extraprocesses,
-            max_queue_size=args.queuesize,
-            verbose=1
-        )
+    model.fit(
+        x=train_generator,
+        steps_per_epoch=train_generator.__len__(),
+        validation_data=validation_generator,
+        validation_steps=validation_generator.__len__(),
+        epochs=args.epochs,
+        callbacks=callbacks,
+        verbose=1
+    )
+    metrics = model.evaluate(
+        x=test_generator,
+        steps=test_generator.__len__(),
+        verbose=1
+    )
 
     print()
     print('total:')

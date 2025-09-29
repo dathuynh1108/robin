@@ -1,7 +1,8 @@
 from keras.layers import Input, Conv2D, MaxPooling2D, UpSampling2D
-from keras.layers.core import SpatialDropout2D, Activation
-from keras.layers.merge import concatenate
-from keras.layers.normalization import BatchNormalization
+from keras.layers import (
+    Input, Conv2D, MaxPooling2D, UpSampling2D,
+    SpatialDropout2D, Activation, BatchNormalization, Concatenate
+)
 from keras.models import Model
 
 
@@ -22,10 +23,11 @@ def down_layer(inputs, filter):
     pool = MaxPooling2D(pool_size=(2, 2))(conv)
     return conv, pool
 
-
-def up_layer(inputs, concats, filter):
-    """Create upsampling layer."""
-    return double_conv_layer(concatenate([UpSampling2D(size=(2, 2))(inputs), concats], axis=3), filter)
+def up_layer(inputs, concats, filters):
+    x = UpSampling2D(size=(2, 2))(inputs)
+    x = Concatenate(axis=3)([x, concats])
+    x = double_conv_layer(x, filters)
+    return x
 
 
 def unet():

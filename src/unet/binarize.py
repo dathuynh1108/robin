@@ -1,5 +1,3 @@
-#!/usr/bin/python3
-
 import argparse
 import glob
 import time
@@ -27,7 +25,7 @@ def parse_args():
                         help=r'directory with input images (default: "%(default)s")')
     parser.add_argument('-o', '--output', type=str, default=os.path.join('.', 'output'),
                         help=r'directory for output images (default: "%(default)s")')
-    parser.add_argument('-w', '--weights', type=str, default=os.path.join('.', 'bin_weights.hdf5'),
+    parser.add_argument('-w', '--weights', type=str, default=os.path.join('.', 'bin_weights.weights.h5'),
                         help=r'path to U-net weights (default: "%(default)s")')
     parser.add_argument('-b', '--batchsize', type=int, default=20,
                         help=r'number of images, simultaneously sent to the GPU (default: %(default)s)')
@@ -42,11 +40,14 @@ def main():
     args = parse_args()
 
     fnames_in = list(glob.iglob(os.path.join(args.input, '**', '*_in.*'), recursive=True))
+    for frame in fnames_in:
+        print("found input image: {}".format(frame))
+        
     model = None
     if len(fnames_in) != 0:
         mkdir_s(args.output)
         model = unet()
-        model.compile(optimizer=Adam(lr=1e-4), loss='binary_crossentropy', metrics=['accuracy'])
+        model.compile(optimizer=Adam(learning_rate=1e-4), loss='binary_crossentropy', metrics=['accuracy'])
         model.load_weights(args.weights)
     for fname in fnames_in:
         img = cv2.imread(fname, cv2.IMREAD_GRAYSCALE).astype(np.float32)
