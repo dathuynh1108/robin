@@ -12,9 +12,7 @@ import imageio
 import tensorflow as tf
 from Augmentor.Operations import Operation
 from PIL import Image
-from alt_model_checkpoint import AltModelCheckpoint
-from keras import backend as K
-from keras.callbacks import (TensorBoard, Callback)
+from keras.callbacks import (TensorBoard, Callback, ModelCheckpoint)
 from keras.optimizers import Adam
 from keras.utils import Sequence
 
@@ -248,18 +246,14 @@ def create_callbacks(model, original_model, args):
     callbacks = []
 
     # Model checkpoint.
-    if args.gpus == 1:
-        model_checkpoint = AltModelCheckpoint(args.weights if args.debug == ''
-                                              else os.path.join(args.debug, 'weights',
-                                                                'weights-improvement-{epoch:02d}.weights.h5'),
-                                              model, monitor='val_dice_coef', mode='max', verbose=1,
-                                              save_best_only=True, save_weights_only=True)
-    else:
-        model_checkpoint = AltModelCheckpoint(args.weights if args.debug == ''
-                                              else os.path.join(args.debug, 'weights',
-                                                                'weights-improvement-{epoch:02d}.weights.h5'),
-                                              original_model, monitor='val_dice_coef', mode='max', verbose=1,
-                                              save_best_only=True, save_weights_only=True)
+    model_checkpoint = ModelCheckpoint(
+        filepath=args.weights if args.debug == '' else os.path.join(args.debug, 'weights', 'weights-improvement-{epoch:02d}.weights.h5'),
+        monitor='val_dice_coef', 
+        mode='max', 
+        verbose=1,
+        save_best_only=True, 
+        save_weights_only=True
+    )
     callbacks.append(model_checkpoint)
 
     # Early stopping.
